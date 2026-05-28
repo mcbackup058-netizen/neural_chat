@@ -41,17 +41,3 @@ class McpToolResult {
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 }
-
-class McpServerConfig {
-  final String name;
-  final String url;
-  final bool isEnabled;
-  final String? authToken;
-
-  McpServerConfig({
-    required this.name,
-    required this.url,
-    this.isEnabled = true,
-    this.authToken,
-  });
-}

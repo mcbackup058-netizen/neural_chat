@@ -1,5 +1,3 @@
-enum InferenceBackend { llamaCpp, glmApi }
-
 class LocalModelConfig {
   final String id;
   final String name;

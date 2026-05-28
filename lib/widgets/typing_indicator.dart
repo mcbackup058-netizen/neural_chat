@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 class TypingIndicator extends StatefulWidget {
@@ -19,7 +20,7 @@ class _TypingIndicatorState extends State<TypingIndicator>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(milliseconds: 1200),
     )..repeat();
   }
 
@@ -49,36 +50,8 @@ class _TypingIndicatorState extends State<TypingIndicator>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Animated bouncing dots
-                AnimatedBuilder(
-                  animation: _controller,
-                  builder: (context, child) {
-                    return Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: List.generate(3, (index) {
-                        // Stagger the animation offset for each dot
-                        final offset =
-                            (_controller.value * 3 - index).clamp(0.0, 1.0);
-                        return Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 2),
-                          child: Transform.translate(
-                            offset: Offset(
-                                0, -8 * (0.5 - (0.5 - offset).abs() * 2)),
-                            child: Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.primary
-                                    .withOpacity(0.5 + 0.5 * offset),
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                          ),
-                        );
-                      }),
-                    );
-                  },
-                ),
+                // Animated bouncing dots using AnimatedBuilder
+                _BouncingDots(controller: _controller),
                 const SizedBox(width: 12),
                 if (widget.onStop != null)
                   GestureDetector(
@@ -102,21 +75,43 @@ class _TypingIndicatorState extends State<TypingIndicator>
   }
 }
 
-/// Proper AnimatedBuilder widget that Flutter uses.
-/// This is a thin wrapper around AnimatedWidget that takes a builder callback.
-class AnimatedBuilder extends AnimatedWidget {
-  final TransitionBuilder builder;
-  final Widget? child;
+/// Animated bouncing dots widget.
+/// Uses a simple approach with separate animation for each dot.
+class _BouncingDots extends StatelessWidget {
+  final Animation<double> controller;
 
-  const AnimatedBuilder({
-    super.key,
-    required Listenable animation,
-    required this.builder,
-    this.child,
-  }) : super(listenable: animation);
+  const _BouncingDots({required this.controller});
 
   @override
   Widget build(BuildContext context) {
-    return builder(context, child);
+    final theme = Theme.of(context);
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, child) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(3, (index) {
+            final t = controller.value;
+            final dotT = (t + index * 0.33) % 1.0;
+            final bounce = (math.sin(dotT * 2 * math.pi) + 1) / 2;
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 2.5),
+              child: Transform.translate(
+                offset: Offset(0, -6 * bounce),
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary
+                        .withValues(alpha: 0.4 + 0.6 * bounce),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            );
+          }),
+        );
+      },
+    );
   }
 }

@@ -14,22 +14,26 @@ class ChatProvider extends ChangeNotifier {
   final SettingsService _settings;
   ZAI? _zai;
   McpService? _mcpService;
+  bool _servicesInitialized = false;
 
   final List<ChatMessage> _messages = [];
   bool _isGenerating = false;
-  ChatMode _chatMode = ChatMode.cloud; // Default to Cloud so it works out of box
+  ChatMode _chatMode = ChatMode.cloud;
   String? _activeModelId;
   LocalModelConfig? _activeModel;
   String _lastError = '';
+  bool _isInitComplete = false;
 
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   bool get isGenerating => _isGenerating;
+  bool get isInitComplete => _isInitComplete;
   ChatMode get chatMode => _chatMode;
   String? get activeModelId => _activeModelId;
   LocalModelConfig? get activeModel => _activeModel;
   String get lastError => _lastError;
   bool get hasLocalModel => _activeModel != null && _activeModel!.isLoaded;
   bool get hasApiKey => _settings.glmApiKey.isNotEmpty;
+  bool get isCloudReady => _zai != null && _mcpService != null;
   ZAI? get zai => _zai;
 
   ChatProvider(this._settings) {
@@ -41,22 +45,24 @@ class ChatProvider extends ChangeNotifier {
       if (_settings.glmApiKey.isNotEmpty) {
         _zai = await ZAI.create(apiKey: _settings.glmApiKey);
         _mcpService = McpService(zai: _zai!);
-        notifyListeners();
+        _servicesInitialized = true;
       }
     } catch (e) {
       debugPrint('Failed to initialize ZAI service: $e');
-      _lastError = 'Failed to initialize cloud API: $e';
+      _lastError = 'Gagal inisialisasi cloud API: $e';
+    } finally {
+      _isInitComplete = true;
+      notifyListeners();
     }
   }
 
-  /// Reinitialize the ZAI service with current API key.
-  /// Called when the API key is changed in settings.
   Future<void> reinitializeServices() async {
     _zai?.dispose();
     _zai = null;
     _mcpService = null;
+    _servicesInitialized = false;
+    _lastError = '';
     await _initServices();
-    notifyListeners();
   }
 
   void setChatMode(ChatMode mode) {
@@ -78,7 +84,7 @@ class ChatProvider extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _lastError = 'Failed to load model: $e';
+      _lastError = 'Gagal memuat model: $e';
       notifyListeners();
       return false;
     }
@@ -95,8 +101,8 @@ class ChatProvider extends ChangeNotifier {
   Future<void> sendMessage(String content) async {
     if (content.trim().isEmpty) return;
 
-    // Ensure services are initialized
-    if (_zai == null && _settings.glmApiKey.isNotEmpty) {
+    // Ensure services are initialized before sending
+    if (!_servicesInitialized) {
       await _initServices();
     }
 
@@ -122,33 +128,42 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final useLocal = _shouldUseLocal(content);
+      final useLocal = _shouldUseLocal();
 
       if (useLocal && hasLocalModel) {
         await _generateLocal(content, assistantMsg);
-      } else if (hasApiKey) {
+      } else if (isCloudReady) {
         await _generateCloud(content, assistantMsg);
+      } else if (hasApiKey && !isCloudReady) {
+        // API key exists but init failed, try again
+        await reinitializeServices();
+        if (isCloudReady) {
+          await _generateCloud(content, assistantMsg);
+        } else {
+          _setError(assistantMsg, 'Gagal terhubung ke cloud API. Periksa API key di Settings.');
+        }
+      } else if (!hasApiKey) {
+        _setError(assistantMsg, 'API key belum dikonfigurasi. Buka Settings untuk mengatur API key.');
       } else {
-        final errorMsg = hasLocalModel
-            ? 'Local model is available but encountered an error. No API key configured for cloud fallback.'
-            : 'No API key configured. Please set your API key in Settings.';
-        _updateMessage(assistantMsg,
-            content: errorMsg,
-            status: MessageStatus.error,
-            errorMessage: errorMsg);
+        _setError(assistantMsg, 'Tidak ada model atau API yang tersedia.');
       }
     } catch (e) {
-      _updateMessage(assistantMsg,
-          content: 'Error: $e',
-          status: MessageStatus.error,
-          errorMessage: e.toString());
+      _setError(assistantMsg, 'Error: $e');
     } finally {
       _isGenerating = false;
       notifyListeners();
     }
   }
 
-  bool _shouldUseLocal(String content) {
+  void _setError(ChatMessage msg, String error) {
+    _updateMessage(msg,
+        content: error,
+        status: MessageStatus.error,
+        errorMessage: error);
+    _lastError = error;
+  }
+
+  bool _shouldUseLocal() {
     switch (_chatMode) {
       case ChatMode.local:
         return true;
@@ -174,9 +189,9 @@ class ChatProvider extends ChangeNotifier {
           status: MessageStatus.complete,
           source: MessageSource.local);
     } catch (e) {
-      if (_settings.useCloudFallback && hasApiKey) {
-        // Fallback to cloud - update message source
+      if (_settings.useCloudFallback && isCloudReady) {
         buffer.clear();
+        _updateMessage(msg, content: '', status: MessageStatus.streaming);
         await _generateCloud(prompt, msg);
       } else {
         rethrow;
@@ -184,52 +199,29 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
-  /// Generate via z-ai-web-dev-sdk cloud (GLM 5.1 + MCP).
+  /// Generate via z-ai-web-dev-sdk cloud (GLM + MCP).
   Future<void> _generateCloud(String prompt, ChatMessage msg) async {
     if (_zai == null || _mcpService == null) {
-      throw Exception(
-          'Cloud API not configured. Please set your API key in Settings.');
+      throw Exception('Cloud API belum siap. Periksa Settings.');
     }
 
-    final history = _buildConversationHistory();
+    final history = _buildConversationHistory(prompt);
     final buffer = StringBuffer();
-    final toolResults = <Map<String, dynamic>>[];
 
     try {
-      // Use z-ai-web-dev-sdk streaming via MCP service
-      await for (final token in _mcpService!.chatWithMcp(
+      final stream = _mcpService!.chatWithMcp(
         messages: history,
         temperature: _settings.defaultTemperature,
         maxTokens: _settings.defaultMaxTokens,
-      )) {
-        // Check if token is a tool_call JSON
-        if (token.startsWith('{') && token.contains('"type":"tool_call"')) {
-          try {
-            final toolCall = jsonDecode(token) as Map<String, dynamic>;
-            final toolName = toolCall['name'] as String;
-            final args = jsonDecode(toolCall['arguments'] as String) as Map<String, dynamic>;
+      );
 
-            // Show tool usage in the message
-            buffer.write('\n\n**Using tool: $toolName**...\n');
-            _updateMessage(msg, content: buffer.toString(), source: MessageSource.cloud);
-
-            // Execute the tool
-            final result = await _mcpService!.executeTool(toolName, args);
-            toolResults.add({
-              'role': 'tool',
-              'tool_call_id': toolCall['id'] ?? '',
-              'content': result.result,
-            });
-
-            buffer.write('Tool result: ${result.success ? "Success" : "Failed"}\n');
-            _updateMessage(msg, content: buffer.toString(), source: MessageSource.cloud);
-          } catch (_) {
-            // If parsing fails, treat as regular text
-            buffer.write(token);
-            _updateMessage(msg, content: buffer.toString(), source: MessageSource.cloud);
-          }
+      await for (final chunk in stream) {
+        // Check if this chunk contains tool_call JSON
+        final parsed = _tryParseToolCall(chunk);
+        if (parsed != null) {
+          await _handleToolCall(parsed, buffer, msg);
         } else {
-          buffer.write(token);
+          buffer.write(chunk);
           _updateMessage(msg, content: buffer.toString(), source: MessageSource.cloud);
         }
       }
@@ -238,24 +230,106 @@ class ChatProvider extends ChangeNotifier {
           content: buffer.toString(),
           status: MessageStatus.complete,
           source: MessageSource.cloud);
-    } catch (e) {
+    } on ZaiException catch (e) {
+      final errorMsg = _formatApiError(e);
       _updateMessage(msg,
-          content: buffer.isEmpty ? 'Cloud API error: $e' : buffer.toString(),
+          content: buffer.isEmpty ? errorMsg : buffer.toString(),
           status: buffer.isEmpty ? MessageStatus.error : MessageStatus.complete,
-          errorMessage: e.toString());
+          errorMessage: errorMsg);
+    } catch (e) {
+      final errorMsg = 'Cloud API error: ${e.toString()}';
+      _updateMessage(msg,
+          content: buffer.isEmpty ? errorMsg : buffer.toString(),
+          status: buffer.isEmpty ? MessageStatus.error : MessageStatus.complete,
+          errorMessage: errorMsg);
     }
   }
 
-  List<Map<String, String>> _buildConversationHistory() {
-    // Only include completed messages (skip streaming placeholders and errors)
-    return _messages
-        .where((m) =>
-            m.status == MessageStatus.complete && m.content.isNotEmpty)
-        .map((m) => {
-              'role': m.isUser ? 'user' : 'assistant',
-              'content': m.content,
-            })
-        .toList();
+  /// Try to parse a tool_call from a stream chunk.
+  /// Returns null if the chunk is regular text content.
+  Map<String, dynamic>? _tryParseToolCall(String chunk) {
+    // Only attempt parsing on chunks that look like tool_call JSON
+    if (!chunk.contains('"type"') || !chunk.contains('"tool_call"')) {
+      return null;
+    }
+    try {
+      final parsed = jsonDecode(chunk) as Map<String, dynamic>;
+      if (parsed['type'] == 'tool_call') {
+        return parsed;
+      }
+    } catch (_) {
+      // Not valid JSON - treat as regular text
+    }
+    return null;
+  }
+
+  /// Handle a tool call from the API.
+  Future<void> _handleToolCall(
+    Map<String, dynamic> toolCall,
+    StringBuffer buffer,
+    ChatMessage msg,
+  ) async {
+    final toolName = toolCall['name'] as String? ?? 'unknown';
+    String argsStr = toolCall['arguments'] as String? ?? '{}';
+
+    // Parse arguments safely
+    Map<String, dynamic> args;
+    try {
+      args = jsonDecode(argsStr) as Map<String, dynamic>;
+    } catch (_) {
+      args = {};
+    }
+
+    // Show tool usage indicator
+    buffer.write('\n\n🔍 Memanggil tool: *$toolName*...\n');
+    _updateMessage(msg, content: buffer.toString(), source: MessageSource.cloud);
+
+    try {
+      final result = await _mcpService!.executeTool(toolName, args);
+      if (result.success) {
+        buffer.write('✅ $toolName berhasil.\n\n');
+      } else {
+        buffer.write('❌ $toolName gagal: ${result.result}\n\n');
+      }
+    } catch (e) {
+      buffer.write('❌ Error tool: $e\n\n');
+    }
+
+    _updateMessage(msg, content: buffer.toString(), source: MessageSource.cloud);
+  }
+
+  /// Format API error for user display.
+  String _formatApiError(ZaiException e) {
+    if (e.statusCode == 401) {
+      return 'API key tidak valid. Periksa API key di Settings.';
+    } else if (e.statusCode == 429) {
+      return 'Rate limit tercapai. Coba lagi beberapa saat.';
+    } else if (e.statusCode == 500) {
+      return 'Server API sedang bermasalah. Coba lagi nanti.';
+    } else if (e.statusCode != null) {
+      return 'API error (${e.statusCode}). Coba lagi.';
+    }
+    return 'Gagal terhubung ke API: ${e.message}';
+  }
+
+  /// Build conversation history for API context.
+  /// Includes all completed messages plus the current prompt.
+  List<Map<String, String>> _buildConversationHistory(String currentPrompt) {
+    final history = <Map<String, String>>[];
+
+    // Add completed past messages (not the current user message which was just added)
+    for (final m in _messages) {
+      if (m.status == MessageStatus.complete &&
+          m.content.isNotEmpty &&
+          m.id != _messages.last.id) {
+        history.add({
+          'role': m.isUser ? 'user' : 'assistant',
+          'content': m.content,
+        });
+      }
+    }
+
+    return history;
   }
 
   void _updateMessage(ChatMessage msg,
@@ -289,12 +363,10 @@ class ChatProvider extends ChangeNotifier {
   Future<void> regenerateLastMessage() async {
     if (_messages.length < 2) return;
 
-    // Remove the last assistant message if it exists
     if (!_messages.last.isUser) {
       _messages.removeLast();
     }
 
-    // Find and remove the last user message
     final lastUserMsg = _messages.where((m) => m.isUser).lastOrNull;
     if (lastUserMsg != null) {
       _messages.remove(lastUserMsg);

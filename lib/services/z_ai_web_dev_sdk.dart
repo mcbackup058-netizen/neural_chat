@@ -1,37 +1,10 @@
 import 'dart:convert';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:crypto/crypto.dart';
 
 /// Dart port of z-ai-web-dev-sdk for Zhipu GLM API.
-///
-/// Usage:
-/// ```dart
-/// final zai = await ZAI.create(apiKey: 'your-api-key');
-///
-/// // Chat completions
-/// final completion = await zai.chat.completions.create(
-///   messages: [
-///     {'role': 'user', 'content': 'Hello!'},
-///   ],
-/// );
-///
-/// // Streaming
-/// await for (final token in zai.chat.completions.createStream(
-///   messages: [
-///     {'role': 'user', 'content': 'Hello!'},
-///   ],
-/// )) {
-///   print(token);
-/// }
-///
-/// // Function calling
-/// final result = await zai.functions.invoke('web_search', {
-///   'query': 'Flutter framework',
-/// });
-///
-/// zai.dispose();
-/// ```
 class ZAI {
   final String apiKey;
   late final String _keyId;
@@ -56,7 +29,6 @@ class ZAI {
     images = Images._(this);
   }
 
-  /// Create a new ZAI instance.
   static Future<ZAI> create({
     required String apiKey,
     String baseUrl = 'https://open.bigmodel.cn/api/paas/v4',
@@ -65,10 +37,9 @@ class ZAI {
   }
 
   /// Generate JWT token from API key (id.secret format).
-  /// Matches z-ai-web-dev-sdk internal token generation.
   Future<String> _generateToken() async {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final exp = now + 3600; // 1 hour expiry
+    final exp = now + 3600;
 
     final header = _base64UrlNoPadding(utf8.encode(jsonEncode({
       'alg': 'HS256',
@@ -90,7 +61,6 @@ class ZAI {
     return '$message.$signature';
   }
 
-  /// Get authenticated headers with JWT token.
   Future<Map<String, String>> get _headers async {
     final token = await _generateToken();
     return {
@@ -99,7 +69,6 @@ class ZAI {
     };
   }
 
-  /// Base64URL encode without padding (JWT standard).
   String _base64UrlNoPadding(List<int> bytes) {
     return base64UrlEncode(bytes).replaceAll('=', '');
   }
@@ -109,15 +78,12 @@ class ZAI {
   }
 }
 
-// ─── Chat Completions Module ─────────────────────────────────────────
-
-/// Chat completions module - mirrors z-ai-web-dev-sdk chat.completions
+/// Chat completions module.
 class ChatCompletions {
   final ZAI _zai;
   ChatCompletions._(this._zai);
 
-  /// Non-streaming chat completion request.
-  /// Returns the full response text.
+  /// Non-streaming chat completion.
   Future<ChatCompletionResponse> create({
     required List<Map<String, String>> messages,
     String model = 'glm-4-plus',
@@ -126,7 +92,6 @@ class ChatCompletions {
     double topP = 0.7,
     List<Map<String, dynamic>>? tools,
     String? toolChoice,
-    bool stream = false,
   }) async {
     final body = <String, dynamic>{
       'model': model,
@@ -137,23 +102,21 @@ class ChatCompletions {
       'stream': false,
     };
 
-    if (tools != null && tools.isNotEmpty) {
-      body['tools'] = tools;
-    }
-    if (toolChoice != null) {
-      body['tool_choice'] = toolChoice;
-    }
+    if (tools != null && tools.isNotEmpty) body['tools'] = tools;
+    if (toolChoice != null) body['tool_choice'] = toolChoice;
 
     final headers = await _zai._headers;
-    final response = await _zai._client.post(
-      Uri.parse('${_zai.baseUrl}/chat/completions'),
-      headers: headers,
-      body: jsonEncode(body),
-    );
+    final response = await _zai._client
+        .post(
+          Uri.parse('${_zai.baseUrl}/chat/completions'),
+          headers: headers,
+          body: jsonEncode(body),
+        )
+        .timeout(const Duration(seconds: 60));
 
     if (response.statusCode != 200) {
       throw ZaiException(
-        'Chat completion error ${response.statusCode}',
+        'Chat error ${response.statusCode}',
         statusCode: response.statusCode,
         body: response.body,
       );
@@ -163,8 +126,7 @@ class ChatCompletions {
     return ChatCompletionResponse.fromJson(json);
   }
 
-  /// Streaming chat completion - yields tokens as they arrive.
-  /// Mirrors z-ai-web-dev-sdk streaming behavior.
+  /// Streaming chat completion - yields tokens as they arrive via SSE.
   Stream<String> createStream({
     required List<Map<String, String>> messages,
     String model = 'glm-4-plus',
@@ -182,9 +144,7 @@ class ChatCompletions {
       'stream': true,
     };
 
-    if (tools != null && tools.isNotEmpty) {
-      body['tools'] = tools;
-    }
+    if (tools != null && tools.isNotEmpty) body['tools'] = tools;
 
     final headers = await _zai._headers;
     final request = http.Request(
@@ -194,18 +154,28 @@ class ChatCompletions {
     request.headers.addAll(headers);
     request.body = jsonEncode(body);
 
-    final response = await _zai._client.send(request);
+    final response = await _zai._client.send(request).timeout(
+          const Duration(seconds: 30),
+          onTimeout: () {
+            throw ZaiException('Connection timeout');
+          },
+        );
 
     if (response.statusCode != 200) {
-      final errorBody = await response.stream.bytesToString();
+      final errorBody = await response.stream.bytesToString().timeout(
+            const Duration(seconds: 10),
+            onTimeout: () => '{"error":"timeout reading error response"}',
+          );
       throw ZaiException(
         'Stream error ${response.statusCode}: $errorBody',
         statusCode: response.statusCode,
+        body: errorBody,
       );
     }
 
     String buffer = '';
-    await for (final chunk in response.stream.transform(utf8.decoder)) {
+    await for (final chunk
+        in response.stream.transform(utf8.decoder).timeout(const Duration(minutes: 5))) {
       buffer += chunk;
       final lines = buffer.split('\n');
       buffer = lines.removeLast();
@@ -220,84 +190,97 @@ class ChatCompletions {
         try {
           final json = jsonDecode(data) as Map<String, dynamic>;
           final choices = json['choices'] as List?;
-          if (choices != null && choices.isNotEmpty) {
-            final delta = choices[0]['delta'] as Map<String, dynamic>?;
+          if (choices == null || choices.isEmpty) continue;
 
-            // Handle text content
-            if (delta != null && delta['content'] != null) {
-              yield delta['content'] as String;
+          final delta = choices[0]['delta'] as Map<String, dynamic>?;
+          if (delta == null) continue;
+
+          // Handle text content
+          if (delta['content'] != null) {
+            final content = delta['content'] as String;
+            if (content.isNotEmpty) {
+              yield content;
             }
+          }
 
-            // Handle tool calls
-            if (delta != null && delta['tool_calls'] != null) {
-              final toolCalls = delta['tool_calls'] as List;
-              for (final tc in toolCalls) {
-                final fn = tc['function'] as Map<String, dynamic>?;
-                if (fn != null && fn['arguments'] != null) {
-                  // Yield tool call as JSON string for the caller to handle
-                  yield jsonEncode({
-                    'type': 'tool_call',
-                    'id': tc['id'],
-                    'name': fn['name'],
-                    'arguments': fn['arguments'],
-                  });
+          // Handle tool calls
+          if (delta['tool_calls'] != null) {
+            final toolCalls = delta['tool_calls'] as List;
+            for (final tc in toolCalls) {
+              final fn = tc['function'] as Map<String, dynamic>?;
+              if (fn != null) {
+                // Accumulate tool call arguments
+                final name = fn['name'] as String? ?? '';
+                final arguments = fn['arguments'] as String? ?? '';
+
+                // Only yield when we have both name and arguments
+                if (name.isNotEmpty && arguments.isNotEmpty) {
+                  try {
+                    // Validate it's proper JSON
+                    jsonDecode(arguments);
+                    yield jsonEncode({
+                      'type': 'tool_call',
+                      'id': tc['id'] ?? '',
+                      'name': name,
+                      'arguments': arguments,
+                    });
+                  } catch (_) {
+                    // Arguments not complete JSON yet, skip
+                  }
                 }
               }
             }
           }
-        } catch (_) {
-          // Skip malformed chunks
+        } catch (e) {
+          // Skip malformed JSON chunks, log for debugging
+          debugPrint('SSE parse error: $e');
         }
       }
     }
   }
 }
 
-// ─── Functions Module ────────────────────────────────────────────────
-
-/// Functions module - mirrors z-ai-web-dev-sdk functions.invoke
+/// Functions module.
 class Functions {
   final ZAI _zai;
   Functions._(this._zai);
 
-  /// Invoke a function/tool through the GLM API.
-  /// Equivalent to zai.functions.invoke(name, params)
   Future<Map<String, dynamic>> invoke(
     String name,
     Map<String, dynamic> params,
   ) async {
-    final headers = await _zai._headers;
-    final response = await _zai._client.post(
-      Uri.parse('${_zai.baseUrl}/functions/invoke'),
-      headers: headers,
-      body: jsonEncode({
-        'name': name,
-        'parameters': params,
-      }),
-    );
+    try {
+      final headers = await _zai._headers;
+      final response = await _zai._client
+          .post(
+            Uri.parse('${_zai.baseUrl}/functions/invoke'),
+            headers: headers,
+            body: jsonEncode({
+              'name': name,
+              'parameters': params,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
 
-    if (response.statusCode != 200) {
-      // If the invoke endpoint doesn't exist, use chat completions as fallback
-      return await _invokeViaChat(name, params);
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      debugPrint('Functions.invoke failed: $e');
     }
 
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    // Fallback to chat completions
+    return await _invokeViaChat(name, params);
   }
 
-  /// Fallback: use chat completions to simulate function invocation
   Future<Map<String, dynamic>> _invokeViaChat(
     String name,
     Map<String, dynamic> params,
   ) async {
-    final systemPrompt = '''You are a function executor. Execute the following function and return ONLY a JSON result.
-Function: $name
-Parameters: ${jsonEncode(params)}
-Respond with a JSON object containing the result.''';
-
     final response = await _zai.chatCompletions.create(
       messages: [
-        {'role': 'system', 'content': systemPrompt},
-        {'role': 'user', 'content': 'Execute the function.'},
+        {'role': 'system', 'content': 'Execute the function and return JSON result.'},
+        {'role': 'user', 'content': 'Function: $name\nParams: ${jsonEncode(params)}'},
       ],
       model: 'glm-4-flash',
       maxTokens: 1024,
@@ -312,30 +295,24 @@ Respond with a JSON object containing the result.''';
   }
 }
 
-// ─── Images Module ───────────────────────────────────────────────────
-
-/// Images module - mirrors z-ai-web-dev-sdk images.generations
+/// Images module.
 class Images {
   final ZAI _zai;
   Images._(this._zai);
 
-  /// Generate an image from a text prompt.
-  /// Returns base64-encoded image data.
   Future<ImageGenerationResponse> create({
     required String prompt,
     String model = 'cogview-3-plus',
     String size = '1024x1024',
   }) async {
     final headers = await _zai._headers;
-    final response = await _zai._client.post(
-      Uri.parse('${_zai.baseUrl}/images/generations'),
-      headers: headers,
-      body: jsonEncode({
-        'model': model,
-        'prompt': prompt,
-        'size': size,
-      }),
-    );
+    final response = await _zai._client
+        .post(
+          Uri.parse('${_zai.baseUrl}/images/generations'),
+          headers: headers,
+          body: jsonEncode({'model': model, 'prompt': prompt, 'size': size}),
+        )
+        .timeout(const Duration(seconds: 60));
 
     if (response.statusCode != 200) {
       throw ZaiException(
@@ -350,9 +327,7 @@ class Images {
   }
 }
 
-// ─── Response Models ────────────────────────────────────────────────
-
-/// Chat completion response (non-streaming).
+/// Response models
 class ChatCompletionResponse {
   final String id;
   final String model;
@@ -377,11 +352,11 @@ class ChatCompletionResponse {
   factory ChatCompletionResponse.fromJson(Map<String, dynamic> json) {
     final usage = json['usage'] as Map<String, dynamic>? ?? {};
     final choices = json['choices'] as List?;
-    final firstChoice =
-        choices != null && choices.isNotEmpty ? choices[0] as Map<String, dynamic> : {};
+    final firstChoice = choices != null && choices.isNotEmpty
+        ? choices[0] as Map<String, dynamic>
+        : {};
     final message = firstChoice['message'] as Map<String, dynamic>? ?? {};
 
-    // Parse tool calls if present
     List<ToolCall>? toolCalls;
     if (message['tool_calls'] != null) {
       toolCalls = (message['tool_calls'] as List)
@@ -402,17 +377,12 @@ class ChatCompletionResponse {
   }
 }
 
-/// Tool call from the model response.
 class ToolCall {
   final String id;
   final String type;
   final FunctionCall function;
 
-  ToolCall({
-    required this.id,
-    required this.type,
-    required this.function,
-  });
+  ToolCall({required this.id, required this.type, required this.function});
 
   factory ToolCall.fromJson(Map<String, dynamic> json) {
     return ToolCall(
@@ -425,7 +395,6 @@ class ToolCall {
   }
 }
 
-/// Function call details.
 class FunctionCall {
   final String name;
   final String arguments;
@@ -448,10 +417,9 @@ class FunctionCall {
   }
 }
 
-/// Image generation response.
 class ImageGenerationResponse {
   final int created;
-  final List<String> imageData; // base64
+  final List<String> imageData;
 
   ImageGenerationResponse({required this.created, required this.imageData});
 
@@ -459,12 +427,13 @@ class ImageGenerationResponse {
     final dataList = json['data'] as List? ?? [];
     return ImageGenerationResponse(
       created: json['created'] as int? ?? 0,
-      imageData: dataList.map((d) => d['b64_image'] as String? ?? d['url'] as String? ?? '').toList(),
+      imageData: dataList
+          .map((d) =>
+              d['b64_image'] as String? ?? d['url'] as String? ?? '')
+          .toList(),
     );
   }
 }
-
-// ─── Exception ───────────────────────────────────────────────────────
 
 /// ZAI SDK exception.
 class ZaiException implements Exception {
@@ -475,5 +444,6 @@ class ZaiException implements Exception {
   ZaiException(this.message, {this.statusCode, this.body});
 
   @override
-  String toString() => 'ZaiException: $message${statusCode != null ? ' (${statusCode})' : ''}';
+  String toString() =>
+      'ZaiException: $message${statusCode != null ? ' (${statusCode})' : ''}';
 }

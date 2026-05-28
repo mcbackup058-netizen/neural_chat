@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../models/chat_message.dart';
@@ -23,7 +24,7 @@ class MessageBubble extends StatelessWidget {
           crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
             // Source badge
-            if (!isUser)
+            if (!isUser && message.status == MessageStatus.complete)
               Padding(
                 padding: const EdgeInsets.only(bottom: 4, left: 8),
                 child: _SourceBadge(source: message.source),
@@ -44,7 +45,7 @@ class MessageBubble extends StatelessWidget {
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withValues(alpha: 0.05),
                     blurRadius: 8,
                     offset: const Offset(0, 2),
                   ),
@@ -57,27 +58,7 @@ class MessageBubble extends StatelessWidget {
                         color: theme.colorScheme.onPrimary,
                       ),
                     )
-                  : message.status == MessageStatus.streaming
-                      ? Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Flexible(
-                              child: MarkdownBody(
-                                data: message.content.isEmpty ? '...' : message.content,
-                                selectable: true,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            const _TypingDots(),
-                          ],
-                        )
-                      : MarkdownBody(
-                          data: message.content,
-                          selectable: true,
-                          styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-                            p: theme.textTheme.bodyLarge,
-                          ),
-                        ),
+                  : _buildAssistantContent(theme),
             ),
 
             // Error indicator
@@ -89,15 +70,49 @@ class MessageBubble extends StatelessWidget {
                   children: [
                     Icon(Icons.error_outline, size: 14, color: theme.colorScheme.error),
                     const SizedBox(width: 4),
-                    Text(
-                      message.errorMessage ?? 'Error',
-                      style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
+                    Flexible(
+                      child: Text(
+                        message.errorMessage ?? 'Error',
+                        style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildAssistantContent(ThemeData theme) {
+    if (message.status == MessageStatus.streaming) {
+      // Show markdown content + simple dot indicator during streaming
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: MarkdownBody(
+              data: message.content.isEmpty ? '...' : message.content,
+              selectable: true,
+              styleSheet: MarkdownStyleSheet.fromTheme(theme),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 8, top: 4),
+            child: _StreamingDots(),
+          ),
+        ],
+      );
+    }
+
+    return MarkdownBody(
+      data: message.content,
+      selectable: true,
+      styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+        p: theme.textTheme.bodyLarge,
       ),
     );
   }
@@ -118,9 +133,9 @@ class _SourceBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -134,30 +149,54 @@ class _SourceBadge extends StatelessWidget {
   }
 }
 
-class _TypingDots extends StatelessWidget {
-  const _TypingDots();
+/// Simple streaming indicator - three small animated dots.
+class _StreamingDots extends StatefulWidget {
+  @override
+  State<_StreamingDots> createState() => _StreamingDotsState();
+}
+
+class _StreamingDotsState extends State<_StreamingDots>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 18,
-      height: 18,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: List.generate(3, (index) {
-          return AnimatedContainer(
-            duration: const Duration(milliseconds: 600),
-            curve: Curves.easeInOut,
-            width: 4,
-            height: 4,
-            margin: const EdgeInsets.symmetric(horizontal: 1),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-              shape: BoxShape.circle,
-            ),
-          );
-        }),
-      ),
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final t = _controller.value;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(3, (i) {
+            final opacity = 0.3 + 0.7 * ((math.sin(t * 2 * math.pi + i * 0.8) + 1) / 2);
+            return Container(
+              width: 5,
+              height: 5,
+              margin: const EdgeInsets.symmetric(horizontal: 1.5),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.onSurfaceVariant
+                    .withValues(alpha: opacity),
+                shape: BoxShape.circle,
+              ),
+            );
+          }),
+        );
+      },
     );
   }
 }

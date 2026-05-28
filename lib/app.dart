@@ -3,10 +3,12 @@ import 'package:provider/provider.dart';
 import 'providers/chat_provider.dart';
 import 'providers/settings_provider.dart';
 import 'services/settings_service.dart';
+import 'services/chat_history_service.dart';
 import 'screens/chat_screen.dart';
 
 /// Global settings service instance shared across the app.
 final SettingsService _settingsService = SettingsService();
+final ChatHistoryService _chatHistoryService = ChatHistoryService();
 
 class NeuralChatApp extends StatefulWidget {
   const NeuralChatApp({super.key});
@@ -25,8 +27,8 @@ class _NeuralChatAppState extends State<NeuralChatApp> {
   }
 
   Future<void> _initializeApp() async {
-    // Initialize SharedPreferences BEFORE anything else
     await _settingsService.init();
+    await _chatHistoryService.init();
     if (mounted) {
       setState(() => _isReady = true);
     }
@@ -44,7 +46,16 @@ class _NeuralChatAppState extends State<NeuralChatApp> {
         ),
         home: const Scaffold(
           body: Center(
-            child: CircularProgressIndicator(),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.psychology, size: 48, color: Color(0xFF6750A4)),
+                SizedBox(height: 16),
+                CircularProgressIndicator(),
+                SizedBox(height: 12),
+                Text('Memuat NeuralChat...', style: TextStyle(fontSize: 14, color: Colors.grey)),
+              ],
+            ),
           ),
         ),
       );
@@ -56,7 +67,7 @@ class _NeuralChatAppState extends State<NeuralChatApp> {
           create: (_) => SettingsProvider(_settingsService)..loadSettings(),
         ),
         ChangeNotifierProvider(
-          create: (_) => ChatProvider(_settingsService),
+          create: (_) => ChatProvider(_settingsService, _chatHistoryService),
         ),
       ],
       child: MaterialApp(

@@ -39,11 +39,11 @@ jobs:
       - name: Rename APK
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk \
-             build/app/outputs/flutter-apk/neural-chat-v1.0.1-release.apk
+             build/app/outputs/flutter-apk/neural-chat-v2.0.0-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: neural-chat-v1.0.1-release-apk
-          path: build/app/outputs/flutter-apk/neural-chat-v1.0.1-release.apk
+          name: neural-chat-v2.0.0-release-apk
+          path: build/app/outputs/flutter-apk/neural-chat-v2.0.0-release.apk
           retention-days: 30

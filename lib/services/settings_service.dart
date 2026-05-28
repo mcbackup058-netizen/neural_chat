@@ -11,6 +11,9 @@ class SettingsService {
   static const _keyDefaultTemperature = 'default_temperature';
   static const _keyDefaultContextSize = 'default_context_size';
   static const _keyMaxTokens = 'default_max_tokens';
+  static const _keySystemPrompt = 'system_prompt';
+  static const _keyCloudModel = 'cloud_model';
+  static const _keyThemeMode = 'theme_mode';
 
   SharedPreferences? _prefs;
   bool _isInitialized = false;
@@ -73,11 +76,38 @@ class SettingsService {
   }
 
   int get defaultMaxTokens {
-    if (!_isInitialized) return 2048;
-    return _prefs?.getInt(_keyMaxTokens) ?? 2048;
+    if (!_isInitialized) return 4096;
+    return _prefs?.getInt(_keyMaxTokens) ?? 4096;
   }
   set defaultMaxTokens(int value) {
     _prefs?.setInt(_keyMaxTokens, value);
+  }
+
+  // System prompt
+  String get systemPrompt {
+    if (!_isInitialized) return '';
+    return _prefs?.getString(_keySystemPrompt) ?? '';
+  }
+  set systemPrompt(String value) {
+    _prefs?.setString(_keySystemPrompt, value);
+  }
+
+  // Cloud model selection
+  String get cloudModel {
+    if (!_isInitialized) return 'glm-4-plus';
+    return _prefs?.getString(_keyCloudModel) ?? 'glm-4-plus';
+  }
+  set cloudModel(String value) {
+    _prefs?.setString(_keyCloudModel, value);
+  }
+
+  // Theme
+  String get themeMode {
+    if (!_isInitialized) return 'dark';
+    return _prefs?.getString(_keyThemeMode) ?? 'dark';
+  }
+  set themeMode(String value) {
+    _prefs?.setString(_keyThemeMode, value);
   }
 
   // Save/Load Models

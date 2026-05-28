@@ -1,7 +1,7 @@
 name: neural_chat
 description: "AI Chat App - Local GGUF inference + GLM cloud fallback via z-ai-web-dev-sdk"
 publish_to: 'none'
-version: 1.0.3+3
+version: 2.0.0+4
 
 environment:
   sdk: ^3.5.4

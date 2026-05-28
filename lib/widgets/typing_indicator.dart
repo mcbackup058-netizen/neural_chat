@@ -33,9 +33,7 @@ class _TypingIndicatorState extends State<TypingIndicator>
   @override
   Widget build(BuildContext context) {
     if (!widget.isGenerating) return const SizedBox.shrink();
-
     final theme = Theme.of(context);
-
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
@@ -50,8 +48,33 @@ class _TypingIndicatorState extends State<TypingIndicator>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Animated bouncing dots using AnimatedBuilder
-                _BouncingDots(controller: _controller),
+                AnimatedBuilder(
+                  animation: _controller,
+                  builder: (context, child) {
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: List.generate(3, (index) {
+                        final t = _controller.value;
+                        final dotT = (t + index * 0.33) % 1.0;
+                        final bounce = (math.sin(dotT * 2 * math.pi) + 1) / 2;
+                        return Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 2.5),
+                          child: Transform.translate(
+                            offset: Offset(0, -6 * bounce),
+                            child: Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.primary.withValues(alpha: 0.4 + 0.6 * bounce),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
+                    );
+                  },
+                ),
                 const SizedBox(width: 12),
                 if (widget.onStop != null)
                   GestureDetector(
@@ -62,8 +85,7 @@ class _TypingIndicatorState extends State<TypingIndicator>
                         color: theme.colorScheme.errorContainer,
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(Icons.stop,
-                          size: 16, color: theme.colorScheme.error),
+                      child: Icon(Icons.stop, size: 16, color: theme.colorScheme.error),
                     ),
                   ),
               ],
@@ -71,47 +93,6 @@ class _TypingIndicatorState extends State<TypingIndicator>
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Animated bouncing dots widget.
-/// Uses a simple approach with separate animation for each dot.
-class _BouncingDots extends StatelessWidget {
-  final Animation<double> controller;
-
-  const _BouncingDots({required this.controller});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return AnimatedBuilder(
-      animation: controller,
-      builder: (context, child) {
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(3, (index) {
-            final t = controller.value;
-            final dotT = (t + index * 0.33) % 1.0;
-            final bounce = (math.sin(dotT * 2 * math.pi) + 1) / 2;
-            return Container(
-              margin: const EdgeInsets.symmetric(horizontal: 2.5),
-              child: Transform.translate(
-                offset: Offset(0, -6 * bounce),
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primary
-                        .withValues(alpha: 0.4 + 0.6 * bounce),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-            );
-          }),
-        );
-      },
     );
   }
 }

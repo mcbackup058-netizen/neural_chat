@@ -7,11 +7,13 @@ import '../services/local_inference_service.dart';
 import '../services/z_ai_web_dev_sdk.dart';
 import '../services/mcp_service.dart';
 import '../services/settings_service.dart';
+import '../services/chat_history_service.dart';
 
 enum ChatMode { local, cloud, auto }
 
 class ChatProvider extends ChangeNotifier {
   final SettingsService _settings;
+  final ChatHistoryService _history;
   ZAI? _zai;
   McpService? _mcpService;
   bool _servicesInitialized = false;
@@ -23,6 +25,7 @@ class ChatProvider extends ChangeNotifier {
   LocalModelConfig? _activeModel;
   String _lastError = '';
   bool _isInitComplete = false;
+  String _currentConversationId = '';
 
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   bool get isGenerating => _isGenerating;
@@ -35,16 +38,21 @@ class ChatProvider extends ChangeNotifier {
   bool get hasApiKey => _settings.glmApiKey.isNotEmpty;
   bool get isCloudReady => _zai != null && _mcpService != null;
   ZAI? get zai => _zai;
+  String get currentConversationId => _currentConversationId;
 
-  ChatProvider(this._settings) {
+  ChatProvider(this._settings, this._history) {
     _initServices();
   }
 
   Future<void> _initServices() async {
     try {
       if (_settings.glmApiKey.isNotEmpty) {
-        _zai = await ZAI.create(apiKey: _settings.glmApiKey);
+        _zai = await ZAI.create(
+          apiKey: _settings.glmApiKey,
+          baseUrl: _settings.glmApiUrl,
+        );
         _mcpService = McpService(zai: _zai!);
+        _mcpService!.setModel(_settings.cloudModel);
         _servicesInitialized = true;
       }
     } catch (e) {
@@ -63,6 +71,10 @@ class ChatProvider extends ChangeNotifier {
     _servicesInitialized = false;
     _lastError = '';
     await _initServices();
+  }
+
+  void updateCloudModel(String model) {
+    _mcpService?.setModel(model);
   }
 
   void setChatMode(ChatMode mode) {
@@ -98,8 +110,33 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Load messages from a conversation.
+  void loadConversation(String conversationId) {
+    final conv = _history.conversations.firstWhere(
+      (c) => c.id == conversationId,
+      orElse: () => throw Exception('Conversation not found'),
+    );
+    _currentConversationId = conversationId;
+    _messages.clear();
+    _messages.addAll(conv.messages);
+    notifyListeners();
+  }
+
+  /// Start a new conversation.
+  void newConversation() {
+    final conv = _history.createNewConversation();
+    _currentConversationId = conv.id;
+    _messages.clear();
+    notifyListeners();
+  }
+
   Future<void> sendMessage(String content) async {
     if (content.trim().isEmpty) return;
+
+    // Ensure we have a conversation
+    if (_currentConversationId.isEmpty) {
+      newConversation();
+    }
 
     // Ensure services are initialized before sending
     if (!_servicesInitialized) {
@@ -112,6 +149,7 @@ class ChatProvider extends ChangeNotifier {
       isUser: true,
     );
     _messages.add(userMsg);
+    await _history.addMessage(_currentConversationId, userMsg);
     notifyListeners();
 
     // Create assistant message placeholder
@@ -127,18 +165,19 @@ class ChatProvider extends ChangeNotifier {
     _lastError = '';
     notifyListeners();
 
+    final startTime = DateTime.now();
+
     try {
       final useLocal = _shouldUseLocal();
 
       if (useLocal && hasLocalModel) {
-        await _generateLocal(content, assistantMsg);
+        await _generateLocal(content, assistantMsg, startTime);
       } else if (isCloudReady) {
-        await _generateCloud(content, assistantMsg);
+        await _generateCloud(content, assistantMsg, startTime);
       } else if (hasApiKey && !isCloudReady) {
-        // API key exists but init failed, try again
         await reinitializeServices();
         if (isCloudReady) {
-          await _generateCloud(content, assistantMsg);
+          await _generateCloud(content, assistantMsg, startTime);
         } else {
           _setError(assistantMsg, 'Gagal terhubung ke cloud API. Periksa API key di Settings.');
         }
@@ -174,7 +213,7 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> _generateLocal(String prompt, ChatMessage msg) async {
+  Future<void> _generateLocal(String prompt, ChatMessage msg, DateTime startTime) async {
     final service = LocalInferenceService.instance;
     final buffer = StringBuffer();
 
@@ -184,15 +223,23 @@ class ChatProvider extends ChangeNotifier {
         buffer.write(token);
         _updateMessage(msg, content: buffer.toString());
       }
+      final responseTime = DateTime.now().difference(startTime).inMilliseconds;
       _updateMessage(msg,
           content: buffer.toString(),
           status: MessageStatus.complete,
-          source: MessageSource.local);
+          source: MessageSource.local,
+          responseTimeMs: responseTime);
+      await _history.updateLastAssistantMessage(_currentConversationId, msg.copyWith(
+        content: buffer.toString(),
+        status: MessageStatus.complete,
+        source: MessageSource.local,
+        responseTimeMs: responseTime,
+      ));
     } catch (e) {
       if (_settings.useCloudFallback && isCloudReady) {
         buffer.clear();
         _updateMessage(msg, content: '', status: MessageStatus.streaming);
-        await _generateCloud(prompt, msg);
+        await _generateCloud(prompt, msg, startTime);
       } else {
         rethrow;
       }
@@ -200,7 +247,7 @@ class ChatProvider extends ChangeNotifier {
   }
 
   /// Generate via z-ai-web-dev-sdk cloud (GLM + MCP).
-  Future<void> _generateCloud(String prompt, ChatMessage msg) async {
+  Future<void> _generateCloud(String prompt, ChatMessage msg, DateTime startTime) async {
     if (_zai == null || _mcpService == null) {
       throw Exception('Cloud API belum siap. Periksa Settings.');
     }
@@ -213,10 +260,10 @@ class ChatProvider extends ChangeNotifier {
         messages: history,
         temperature: _settings.defaultTemperature,
         maxTokens: _settings.defaultMaxTokens,
+        customSystemPrompt: _settings.systemPrompt.isEmpty ? null : _settings.systemPrompt,
       );
 
       await for (final chunk in stream) {
-        // Check if this chunk contains tool_call JSON
         final parsed = _tryParseToolCall(chunk);
         if (parsed != null) {
           await _handleToolCall(parsed, buffer, msg);
@@ -226,16 +273,26 @@ class ChatProvider extends ChangeNotifier {
         }
       }
 
+      final responseTime = DateTime.now().difference(startTime).inMilliseconds;
       _updateMessage(msg,
           content: buffer.toString(),
           status: MessageStatus.complete,
-          source: MessageSource.cloud);
+          source: MessageSource.cloud,
+          responseTimeMs: responseTime);
+      await _history.updateLastAssistantMessage(_currentConversationId, msg.copyWith(
+        content: buffer.toString(),
+        status: MessageStatus.complete,
+        source: MessageSource.cloud,
+        responseTimeMs: responseTime,
+      ));
     } on ZaiException catch (e) {
       final errorMsg = _formatApiError(e);
+      final responseTime = DateTime.now().difference(startTime).inMilliseconds;
       _updateMessage(msg,
           content: buffer.isEmpty ? errorMsg : buffer.toString(),
           status: buffer.isEmpty ? MessageStatus.error : MessageStatus.complete,
-          errorMessage: errorMsg);
+          errorMessage: buffer.isEmpty ? errorMsg : null,
+          responseTimeMs: responseTime);
     } catch (e) {
       final errorMsg = 'Cloud API error: ${e.toString()}';
       _updateMessage(msg,
@@ -246,9 +303,7 @@ class ChatProvider extends ChangeNotifier {
   }
 
   /// Try to parse a tool_call from a stream chunk.
-  /// Returns null if the chunk is regular text content.
   Map<String, dynamic>? _tryParseToolCall(String chunk) {
-    // Only attempt parsing on chunks that look like tool_call JSON
     if (!chunk.contains('"type"') || !chunk.contains('"tool_call"')) {
       return null;
     }
@@ -272,7 +327,6 @@ class ChatProvider extends ChangeNotifier {
     final toolName = toolCall['name'] as String? ?? 'unknown';
     String argsStr = toolCall['arguments'] as String? ?? '{}';
 
-    // Parse arguments safely
     Map<String, dynamic> args;
     try {
       args = jsonDecode(argsStr) as Map<String, dynamic>;
@@ -313,11 +367,9 @@ class ChatProvider extends ChangeNotifier {
   }
 
   /// Build conversation history for API context.
-  /// Includes all completed messages plus the current prompt.
   List<Map<String, String>> _buildConversationHistory(String currentPrompt) {
     final history = <Map<String, String>>[];
 
-    // Add completed past messages (not the current user message which was just added)
     for (final m in _messages) {
       if (m.status == MessageStatus.complete &&
           m.content.isNotEmpty &&
@@ -336,7 +388,10 @@ class ChatProvider extends ChangeNotifier {
       {String? content,
       MessageStatus? status,
       String? errorMessage,
-      MessageSource? source}) {
+      MessageSource? source,
+      int? responseTimeMs,
+      int? promptTokens,
+      int? completionTokens}) {
     final index = _messages.indexWhere((m) => m.id == msg.id);
     if (index != -1) {
       _messages[index] = msg.copyWith(
@@ -344,6 +399,9 @@ class ChatProvider extends ChangeNotifier {
         status: status,
         errorMessage: errorMessage,
         source: source,
+        responseTimeMs: responseTimeMs,
+        promptTokens: promptTokens,
+        completionTokens: completionTokens,
       );
       notifyListeners();
     }
@@ -357,6 +415,9 @@ class ChatProvider extends ChangeNotifier {
 
   void clearChat() {
     _messages.clear();
+    if (_currentConversationId.isNotEmpty) {
+      _history.clearMessages(_currentConversationId);
+    }
     notifyListeners();
   }
 
@@ -374,6 +435,22 @@ class ChatProvider extends ChangeNotifier {
       await sendMessage(lastUserMsg.content);
     }
   }
+
+  /// Delete a conversation from history.
+  Future<void> deleteConversation(String id) async {
+    await _history.deleteConversation(id);
+    if (_currentConversationId == id) {
+      if (_history.conversations.isNotEmpty) {
+        loadConversation(_history.conversations.first.id);
+      } else {
+        newConversation();
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Get chat history service for UI access.
+  ChatHistoryService get historyService => _history;
 
   @override
   void dispose() {

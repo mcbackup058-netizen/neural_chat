@@ -17,6 +17,11 @@ class SettingsProvider extends ChangeNotifier {
   int get defaultContextSize => _settings.defaultContextSize;
   int get defaultMaxTokens => _settings.defaultMaxTokens;
 
+  // New settings
+  String get systemPrompt => _settings.systemPrompt;
+  String get cloudModel => _settings.cloudModel;
+  String get themeMode => _settings.themeMode;
+
   // Saved models
   List<LocalModelConfig> _models = [];
   List<LocalModelConfig> get models => List.unmodifiable(_models);
@@ -56,6 +61,22 @@ class SettingsProvider extends ChangeNotifier {
 
   void setDefaultMaxTokens(int value) {
     _settings.defaultMaxTokens = value;
+    notifyListeners();
+  }
+
+  // New settings
+  void setSystemPrompt(String value) {
+    _settings.systemPrompt = value;
+    notifyListeners();
+  }
+
+  void setCloudModel(String value) {
+    _settings.cloudModel = value;
+    notifyListeners();
+  }
+
+  void setThemeMode(String value) {
+    _settings.themeMode = value;
     notifyListeners();
   }
 

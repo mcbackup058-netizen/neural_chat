@@ -127,6 +127,7 @@ class ChatCompletions {
   }
 
   /// Streaming chat completion - yields tokens as they arrive via SSE.
+  /// CRITICAL FIX: Properly accumulates tool call arguments across chunks.
   Stream<String> createStream({
     required List<Map<String, String>> messages,
     String model = 'glm-4-plus',
@@ -173,6 +174,9 @@ class ChatCompletions {
       );
     }
 
+    // CRITICAL: Accumulate tool call data across multiple SSE chunks
+    final Map<int, _ToolCallAccumulator> toolCallAccumulators = {};
+
     String buffer = '';
     await for (final chunk
         in response.stream.transform(utf8.decoder).timeout(const Duration(minutes: 5))) {
@@ -185,7 +189,22 @@ class ChatCompletions {
         if (trimmed.isEmpty || !trimmed.startsWith('data: ')) continue;
 
         final data = trimmed.substring(6);
-        if (data == '[DONE]') return;
+        if (data == '[DONE]') {
+          // Flush any remaining accumulated tool calls
+          for (final entry in toolCallAccumulators.entries) {
+            final acc = entry.value;
+            if (acc.name.isNotEmpty && acc.arguments.isNotEmpty) {
+              yield jsonEncode({
+                'type': 'tool_call',
+                'id': acc.id,
+                'name': acc.name,
+                'arguments': acc.arguments,
+              });
+            }
+          }
+          toolCallAccumulators.clear();
+          return;
+        }
 
         try {
           final json = jsonDecode(data) as Map<String, dynamic>;
@@ -203,41 +222,58 @@ class ChatCompletions {
             }
           }
 
-          // Handle tool calls
+          // Handle tool calls - CRITICAL FIX: Accumulate across chunks
           if (delta['tool_calls'] != null) {
             final toolCalls = delta['tool_calls'] as List;
             for (final tc in toolCalls) {
+              final index = tc['index'] as int? ?? 0;
               final fn = tc['function'] as Map<String, dynamic>?;
-              if (fn != null) {
-                // Accumulate tool call arguments
-                final name = fn['name'] as String? ?? '';
-                final arguments = fn['arguments'] as String? ?? '';
 
-                // Only yield when we have both name and arguments
-                if (name.isNotEmpty && arguments.isNotEmpty) {
-                  try {
-                    // Validate it's proper JSON
-                    jsonDecode(arguments);
-                    yield jsonEncode({
-                      'type': 'tool_call',
-                      'id': tc['id'] ?? '',
-                      'name': name,
-                      'arguments': arguments,
-                    });
-                  } catch (_) {
-                    // Arguments not complete JSON yet, skip
-                  }
-                }
+              if (!toolCallAccumulators.containsKey(index)) {
+                toolCallAccumulators[index] = _ToolCallAccumulator();
+              }
+              final acc = toolCallAccumulators[index]!;
+
+              if (tc['id'] != null) acc.id = tc['id'] as String;
+              if (fn != null) {
+                if (fn['name'] != null) acc.name = fn['name'] as String;
+                if (fn['arguments'] != null) acc.arguments += fn['arguments'] as String;
               }
             }
           }
+
+          // Check if this is the last chunk (finish_reason: 'tool_calls' or 'stop')
+          final finishReason = choices[0]['finish_reason'] as String?;
+          if (finishReason != null) {
+            if (finishReason == 'tool_calls' || finishReason == 'stop') {
+              // Flush accumulated tool calls
+              for (final entry in toolCallAccumulators.entries) {
+                final acc = entry.value;
+                if (acc.name.isNotEmpty && acc.arguments.isNotEmpty) {
+                  yield jsonEncode({
+                    'type': 'tool_call',
+                    'id': acc.id,
+                    'name': acc.name,
+                    'arguments': acc.arguments,
+                  });
+                }
+              }
+              toolCallAccumulators.clear();
+            }
+          }
         } catch (e) {
-          // Skip malformed JSON chunks, log for debugging
           debugPrint('SSE parse error: $e');
         }
       }
     }
   }
+}
+
+/// Helper class to accumulate tool call data across multiple SSE chunks.
+class _ToolCallAccumulator {
+  String id = '';
+  String name = '';
+  String arguments = '';
 }
 
 /// Functions module.
@@ -312,7 +348,7 @@ class Images {
           headers: headers,
           body: jsonEncode({'model': model, 'prompt': prompt, 'size': size}),
         )
-        .timeout(const Duration(seconds: 60));
+        .timeout(const Duration(seconds: 120));
 
     if (response.statusCode != 200) {
       throw ZaiException(

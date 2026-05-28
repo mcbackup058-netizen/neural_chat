@@ -3,12 +3,17 @@ import 'z_ai_web_dev_sdk.dart';
 import '../models/mcp_tool.dart';
 
 /// MCP (Model Context Protocol) Service
-/// Bridges between the local app and GLM 5.1 cloud API via z-ai-web-dev-sdk,
-/// providing tools and context that enhance the AI's capabilities.
 class McpService {
   final ZAI _zai;
+  String _model = 'glm-4-plus';
 
   McpService({required ZAI zai}) : _zai = zai;
+
+  void setModel(String model) {
+    _model = model;
+  }
+
+  String get model => _model;
 
   /// Get available MCP tools in z-ai-web-dev-sdk function-calling format.
   List<Map<String, dynamic>> getToolDefinitions() {
@@ -122,13 +127,15 @@ class McpService {
     }
   }
 
-  /// Build system prompt with MCP context for z-ai-web-dev-sdk.
-  String buildMcpSystemPrompt() {
-    return '''You are GLM 5.1, an advanced AI assistant integrated into NeuralChat app.
+  /// Build system prompt with MCP context.
+  String buildMcpSystemPrompt({String? customSystemPrompt}) {
+    final basePrompt = customSystemPrompt?.isNotEmpty == true
+        ? '$customSystemPrompt\n\n'
+        : '';
 
-You are operating through the z-ai-web-dev-sdk interface as a cloud fallback via the Model Context Protocol (MCP).
-The user's primary model is a local GGUF model running on their device. You are called
-when the local model cannot handle the request (too complex, needs web access, etc.).
+    return '''${basePrompt}You are GLM, an advanced AI assistant integrated into NeuralChat app.
+
+You are operating through the z-ai-web-dev-sdk interface as a cloud AI via the Model Context Protocol (MCP).
 
 Available MCP Tools (via z-ai-web-dev-sdk functions.invoke):
 - web_search: Search the web for current information
@@ -145,35 +152,37 @@ Respond in the same language the user uses. Be helpful, accurate, and concise.''
     required List<Map<String, String>> messages,
     double temperature = 0.7,
     int maxTokens = 2048,
+    String? customSystemPrompt,
   }) {
     final mcpMessages = [
-      {'role': 'system', 'content': buildMcpSystemPrompt()},
+      {'role': 'system', 'content': buildMcpSystemPrompt(customSystemPrompt: customSystemPrompt)},
       ...messages,
     ];
 
     return _zai.chatCompletions.createStream(
       messages: mcpMessages,
-      model: 'glm-4-plus',
+      model: _model,
       temperature: temperature,
       maxTokens: maxTokens,
       tools: getToolDefinitions(),
     );
   }
 
-  /// Non-streaming version using z-ai-web-dev-sdk chat.completions.create.
+  /// Non-streaming version.
   Future<String> chatWithMcpSync({
     required List<Map<String, String>> messages,
     double temperature = 0.7,
     int maxTokens = 2048,
+    String? customSystemPrompt,
   }) async {
     final mcpMessages = [
-      {'role': 'system', 'content': buildMcpSystemPrompt()},
+      {'role': 'system', 'content': buildMcpSystemPrompt(customSystemPrompt: customSystemPrompt)},
       ...messages,
     ];
 
     final response = await _zai.chatCompletions.create(
       messages: mcpMessages,
-      model: 'glm-4-plus',
+      model: _model,
       temperature: temperature,
       maxTokens: maxTokens,
       tools: getToolDefinitions(),

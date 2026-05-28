@@ -1,12 +1,14 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../models/chat_message.dart';
 
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
+  final VoidCallback? onRegenerate;
 
-  const MessageBubble({super.key, required this.message});
+  const MessageBubble({super.key, required this.message, this.onRegenerate});
 
   @override
   Widget build(BuildContext context) {
@@ -17,17 +19,32 @@ class MessageBubble extends StatelessWidget {
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.85,
+          maxWidth: MediaQuery.of(context).size.width * 0.88,
         ),
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: Column(
           crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            // Source badge
+            // Source badge + timestamp for assistant messages
             if (!isUser && message.status == MessageStatus.complete)
               Padding(
                 padding: const EdgeInsets.only(bottom: 4, left: 8),
-                child: _SourceBadge(source: message.source),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _SourceBadge(source: message.source),
+                    if (message.responseTimeMs > 0) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        '${(message.responseTimeMs / 1000).toStringAsFixed(1)}s',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
 
             // Message bubble
@@ -52,11 +69,24 @@ class MessageBubble extends StatelessWidget {
                 ],
               ),
               child: isUser
-                  ? Text(
-                      message.content,
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        color: theme.colorScheme.onPrimary,
-                      ),
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          message.content,
+                          style: theme.textTheme.bodyLarge?.copyWith(
+                            color: theme.colorScheme.onPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatTime(message.timestamp),
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: theme.colorScheme.onPrimary.withValues(alpha: 0.6),
+                          ),
+                        ),
+                      ],
                     )
                   : _buildAssistantContent(theme),
             ),
@@ -80,15 +110,48 @@ class MessageBubble extends StatelessWidget {
                   ],
                 ),
               ),
+
+            // Action buttons for completed assistant messages
+            if (!isUser && message.status == MessageStatus.complete && message.content.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2, left: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _ActionButton(
+                      icon: Icons.copy,
+                      tooltip: 'Salin',
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: message.content));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Disalin ke clipboard'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      },
+                    ),
+                    if (onRegenerate != null)
+                      _ActionButton(
+                        icon: Icons.refresh,
+                        tooltip: 'Regenerasi',
+                        onTap: onRegenerate,
+                      ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
     );
   }
 
+  String _formatTime(DateTime dt) {
+    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
   Widget _buildAssistantContent(ThemeData theme) {
     if (message.status == MessageStatus.streaming) {
-      // Show markdown content + simple dot indicator during streaming
       return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -108,12 +171,25 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
-    return MarkdownBody(
-      data: message.content,
-      selectable: true,
-      styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
-        p: theme.textTheme.bodyLarge,
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        MarkdownBody(
+          data: message.content,
+          selectable: true,
+          styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(
+            p: theme.textTheme.bodyLarge,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          _formatTime(message.timestamp),
+          style: TextStyle(
+            fontSize: 10,
+            color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -149,7 +225,26 @@ class _SourceBadge extends StatelessWidget {
   }
 }
 
-/// Simple streaming indicator - three small animated dots.
+class _ActionButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  const _ActionButton({required this.icon, required this.tooltip, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Icon(icon, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.5)),
+      ),
+    );
+  }
+}
+
 class _StreamingDots extends StatefulWidget {
   @override
   State<_StreamingDots> createState() => _StreamingDotsState();

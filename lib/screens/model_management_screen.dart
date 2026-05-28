@@ -210,7 +210,7 @@ class _ModelManagementScreenState extends State<ModelManagementScreen> {
 
                     final settings = context.read<SettingsProvider>();
 
-                    if (isEditing && existingModel != null) {
+                    if (isEditing) {
                       final updatedModel = existingModel.copyWith(
                         name: name,
                         contextSize: contextSize,

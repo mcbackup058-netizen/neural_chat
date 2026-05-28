@@ -13,7 +13,6 @@ class TypingIndicator extends StatefulWidget {
 class _TypingIndicatorState extends State<TypingIndicator>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
-  late Animation<double> _animation;
 
   @override
   void initState() {
@@ -22,7 +21,6 @@ class _TypingIndicatorState extends State<TypingIndicator>
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat();
-    _animation = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
   }
 
   @override
@@ -51,29 +49,36 @@ class _TypingIndicatorState extends State<TypingIndicator>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                ...List.generate(3, (index) {
-                  return AnimatedBuilder(
-                    animation: _animation,
-                    builder: (context, child) {
-                      final offset = (index * 0.3 + _animation.value) % 1.0;
-                      return Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 2),
-                        child: Transform.translate(
-                          offset: Offset(0, -8 * (0.5 - (0.5 - offset).abs() * 2)),
-                          child: Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primary
-                                  .withOpacity(0.5 + 0.5 * offset),
-                              shape: BoxShape.circle,
+                // Animated bouncing dots
+                AnimatedBuilder(
+                  animation: _controller,
+                  builder: (context, child) {
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: List.generate(3, (index) {
+                        // Stagger the animation offset for each dot
+                        final offset =
+                            (_controller.value * 3 - index).clamp(0.0, 1.0);
+                        return Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                          child: Transform.translate(
+                            offset: Offset(
+                                0, -8 * (0.5 - (0.5 - offset).abs() * 2)),
+                            child: Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.primary
+                                    .withOpacity(0.5 + 0.5 * offset),
+                                shape: BoxShape.circle,
+                              ),
                             ),
                           ),
-                        ),
-                      );
-                    },
-                  );
-                }),
+                        );
+                      }),
+                    );
+                  },
+                ),
                 const SizedBox(width: 12),
                 if (widget.onStop != null)
                   GestureDetector(
@@ -84,8 +89,8 @@ class _TypingIndicatorState extends State<TypingIndicator>
                         color: theme.colorScheme.errorContainer,
                         shape: BoxShape.circle,
                       ),
-                      child:
-                          Icon(Icons.stop, size: 16, color: theme.colorScheme.error),
+                      child: Icon(Icons.stop,
+                          size: 16, color: theme.colorScheme.error),
                     ),
                   ),
               ],
@@ -94,5 +99,24 @@ class _TypingIndicatorState extends State<TypingIndicator>
         ],
       ),
     );
+  }
+}
+
+/// Proper AnimatedBuilder widget that Flutter uses.
+/// This is a thin wrapper around AnimatedWidget that takes a builder callback.
+class AnimatedBuilder extends AnimatedWidget {
+  final TransitionBuilder builder;
+  final Widget? child;
+
+  const AnimatedBuilder({
+    super.key,
+    required Listenable animation,
+    required this.builder,
+    this.child,
+  }) : super(listenable: animation);
+
+  @override
+  Widget build(BuildContext context) {
+    return builder(context, child);
   }
 }

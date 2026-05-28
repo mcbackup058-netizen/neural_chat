@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../models/chat_message.dart';
 import '../models/model_config.dart';
@@ -16,7 +17,7 @@ class ChatProvider extends ChangeNotifier {
 
   final List<ChatMessage> _messages = [];
   bool _isGenerating = false;
-  ChatMode _chatMode = ChatMode.auto;
+  ChatMode _chatMode = ChatMode.cloud; // Default to Cloud so it works out of box
   String? _activeModelId;
   LocalModelConfig? _activeModel;
   String _lastError = '';
@@ -36,20 +37,25 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> _initServices() async {
-    if (_settings.glmApiKey.isNotEmpty) {
-      _zai = await ZAI.create(
-        apiKey: _settings.glmApiKey,
-      );
-      _mcpService = McpService(zai: _zai!);
+    try {
+      if (_settings.glmApiKey.isNotEmpty) {
+        _zai = await ZAI.create(apiKey: _settings.glmApiKey);
+        _mcpService = McpService(zai: _zai!);
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('Failed to initialize ZAI service: $e');
+      _lastError = 'Failed to initialize cloud API: $e';
     }
   }
 
-  void updateApiKey(String apiKey) {
-    _settings.glmApiKey = apiKey;
+  /// Reinitialize the ZAI service with current API key.
+  /// Called when the API key is changed in settings.
+  Future<void> reinitializeServices() async {
     _zai?.dispose();
     _zai = null;
     _mcpService = null;
-    _initServices();
+    await _initServices();
     notifyListeners();
   }
 
@@ -89,6 +95,11 @@ class ChatProvider extends ChangeNotifier {
   Future<void> sendMessage(String content) async {
     if (content.trim().isEmpty) return;
 
+    // Ensure services are initialized
+    if (_zai == null && _settings.glmApiKey.isNotEmpty) {
+      await _initServices();
+    }
+
     // Add user message
     final userMsg = ChatMessage(
       content: content.trim(),
@@ -120,7 +131,7 @@ class ChatProvider extends ChangeNotifier {
       } else {
         final errorMsg = hasLocalModel
             ? 'Local model is available but encountered an error. No API key configured for cloud fallback.'
-            : 'No model loaded and no API key configured. Please load a GGUF model or set your API key in settings.';
+            : 'No API key configured. Please set your API key in Settings.';
         _updateMessage(assistantMsg,
             content: errorMsg,
             status: MessageStatus.error,
@@ -164,6 +175,7 @@ class ChatProvider extends ChangeNotifier {
           source: MessageSource.local);
     } catch (e) {
       if (_settings.useCloudFallback && hasApiKey) {
+        // Fallback to cloud - update message source
         buffer.clear();
         await _generateCloud(prompt, msg);
       } else {
@@ -176,11 +188,12 @@ class ChatProvider extends ChangeNotifier {
   Future<void> _generateCloud(String prompt, ChatMessage msg) async {
     if (_zai == null || _mcpService == null) {
       throw Exception(
-          'z-ai-web-dev-sdk not configured. Please set your API key in settings.');
+          'Cloud API not configured. Please set your API key in Settings.');
     }
 
     final history = _buildConversationHistory();
     final buffer = StringBuffer();
+    final toolResults = <Map<String, dynamic>>[];
 
     try {
       // Use z-ai-web-dev-sdk streaming via MCP service
@@ -189,9 +202,38 @@ class ChatProvider extends ChangeNotifier {
         temperature: _settings.defaultTemperature,
         maxTokens: _settings.defaultMaxTokens,
       )) {
-        buffer.write(token);
-        _updateMessage(msg, content: buffer.toString());
+        // Check if token is a tool_call JSON
+        if (token.startsWith('{') && token.contains('"type":"tool_call"')) {
+          try {
+            final toolCall = jsonDecode(token) as Map<String, dynamic>;
+            final toolName = toolCall['name'] as String;
+            final args = jsonDecode(toolCall['arguments'] as String) as Map<String, dynamic>;
+
+            // Show tool usage in the message
+            buffer.write('\n\n**Using tool: $toolName**...\n');
+            _updateMessage(msg, content: buffer.toString(), source: MessageSource.cloud);
+
+            // Execute the tool
+            final result = await _mcpService!.executeTool(toolName, args);
+            toolResults.add({
+              'role': 'tool',
+              'tool_call_id': toolCall['id'] ?? '',
+              'content': result.result,
+            });
+
+            buffer.write('Tool result: ${result.success ? "Success" : "Failed"}\n');
+            _updateMessage(msg, content: buffer.toString(), source: MessageSource.cloud);
+          } catch (_) {
+            // If parsing fails, treat as regular text
+            buffer.write(token);
+            _updateMessage(msg, content: buffer.toString(), source: MessageSource.cloud);
+          }
+        } else {
+          buffer.write(token);
+          _updateMessage(msg, content: buffer.toString(), source: MessageSource.cloud);
+        }
       }
+
       _updateMessage(msg,
           content: buffer.toString(),
           status: MessageStatus.complete,
@@ -205,8 +247,10 @@ class ChatProvider extends ChangeNotifier {
   }
 
   List<Map<String, String>> _buildConversationHistory() {
+    // Only include completed messages (skip streaming placeholders and errors)
     return _messages
-        .where((m) => m.status != MessageStatus.error && m.content.isNotEmpty)
+        .where((m) =>
+            m.status == MessageStatus.complete && m.content.isNotEmpty)
         .map((m) => {
               'role': m.isUser ? 'user' : 'assistant',
               'content': m.content,
@@ -245,10 +289,12 @@ class ChatProvider extends ChangeNotifier {
   Future<void> regenerateLastMessage() async {
     if (_messages.length < 2) return;
 
+    // Remove the last assistant message if it exists
     if (!_messages.last.isUser) {
       _messages.removeLast();
     }
 
+    // Find and remove the last user message
     final lastUserMsg = _messages.where((m) => m.isUser).lastOrNull;
     if (lastUserMsg != null) {
       _messages.remove(lastUserMsg);

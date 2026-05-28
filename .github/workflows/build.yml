@@ -23,7 +23,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.27.4'
           channel: 'stable'
           cache: true
 
@@ -36,30 +36,14 @@ jobs:
       - name: Build Release APK
         run: flutter build apk --release
 
+      - name: Rename APK
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             build/app/outputs/flutter-apk/neural-chat-v1.0.1-release.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: neural-chat-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
-          retention-days: 7
-
-      - name: Create Release
-        if: success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0.0
-          name: NeuralChat v1.0.0
-          body: |
-            ## NeuralChat - AI Chat App
-
-            ### Features
-            - Local GGUF model inference
-            - GLM 5.1 Cloud via z-ai-web-dev-sdk
-            - MCP (Model Context Protocol) with 4 tools
-            - 3 Chat Modes: Local / Cloud / Auto
-            - Material 3 Dark Theme
-            - Streaming responses
-          files: build/app/outputs/flutter-apk/app-release.apk
-          draft: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: neural-chat-v1.0.1-release-apk
+          path: build/app/outputs/flutter-apk/neural-chat-v1.0.1-release.apk
+          retention-days: 30

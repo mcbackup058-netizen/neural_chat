@@ -22,8 +22,8 @@ class ModelSelector extends StatelessWidget {
             provider.hasLocalModel),
         _buildMenuItem(context, ChatMode.cloud, Icons.cloud, 'GLM Cloud',
             provider.hasApiKey ? 'API Connected' : 'No API key',
-            provider.hasApiKey),
-        _buildMenuItem(context, ChatMode.auto, Icons.auto_awesome, 'Auto (Recommended)',
+            true),
+        _buildMenuItem(context, ChatMode.auto, Icons.auto_awesome, 'Auto',
             'Falls back to cloud when needed', true),
       ],
       child: Container(

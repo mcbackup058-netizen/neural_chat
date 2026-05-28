@@ -273,7 +273,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       const SizedBox(height: 8),
                       DropdownButtonFormField<int>(
-                        initialValue: settings.defaultContextSize,
+                        value: settings.defaultContextSize,
                         decoration: const InputDecoration(
                           border: OutlineInputBorder(),
                           prefixIcon: Icon(Icons.format_list_numbered),

@@ -1,0 +1,22 @@
+*.iml
+.dart_tool/
+.packages
+build/
+.metadata
+pubspec.lock
+.idea/
+*.log
+
+# Android
+.gradle/
+local.properties
+.idea/
+**/build/
+*.apk
+*.ap_
+
+# macOS
+.DS_Store
+
+# Generated
+/generated_plugin_registrant.dart

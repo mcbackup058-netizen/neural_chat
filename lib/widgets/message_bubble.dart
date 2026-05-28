@@ -135,7 +135,7 @@ class MessageBubble extends StatelessWidget {
                       _ActionButton(
                         icon: Icons.refresh,
                         tooltip: 'Regenerasi',
-                        onTap: onRegenerate,
+                        onTap: () => onRegenerate!(),
                       ),
                   ],
                 ),

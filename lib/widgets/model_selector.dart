@@ -43,10 +43,10 @@ class ModelSelector extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(_getModeIcon(provider.chatMode), size: 16, color: theme.colorScheme.primary),
+            Icon(_modeIcon(provider.chatMode), size: 16, color: theme.colorScheme.primary),
             const SizedBox(width: 6),
             Text(
-              _getModeLabel(provider.chatMode),
+              _modeLabel(provider.chatMode),
               style: theme.textTheme.labelMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
                 fontWeight: FontWeight.w600,
@@ -59,6 +59,18 @@ class ModelSelector extends StatelessWidget {
       ),
     );
   }
+
+  static IconData _modeIcon(ChatMode mode) => switch (mode) {
+    ChatMode.local => Icons.memory,
+    ChatMode.cloud => Icons.cloud,
+    ChatMode.auto => Icons.auto_awesome,
+  };
+
+  static String _modeLabel(ChatMode mode) => switch (mode) {
+    ChatMode.local => 'Local',
+    ChatMode.cloud => 'GLM Cloud',
+    ChatMode.auto => 'Auto',
+  };
 
   PopupMenuItem<String> _buildModeItem(
     BuildContext context,

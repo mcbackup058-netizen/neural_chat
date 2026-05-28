@@ -18,6 +18,24 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
+  @override
+  void initState() {
+    super.initState();
+    // Auto-detect best mode on first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoSelectBestMode();
+    });
+  }
+
+  void _autoSelectBestMode() {
+    final provider = context.read<ChatProvider>();
+    // If mode is Local but no model is loaded, switch to Cloud
+    if (provider.chatMode == ChatMode.local && !provider.hasLocalModel) {
+      provider.setChatMode(ChatMode.cloud);
+    }
+    // If mode is auto and no model, still show cloud-ready message
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -83,7 +101,7 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Consumer<ChatProvider>(
         builder: (context, chatProvider, child) {
           if (chatProvider.messages.isEmpty && !chatProvider.isGenerating) {
-            return _buildEmptyState();
+            return _buildEmptyState(chatProvider);
           }
 
           return Column(
@@ -151,7 +169,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     'Local & Cloud AI Chat',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Theme.of(context).colorScheme.onPrimaryContainer
-                              .withOpacity(0.7),
+                              .withValues(alpha: 0.7),
                         ),
                   ),
                 ],
@@ -216,8 +234,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(ChatProvider chatProvider) {
     final theme = Theme.of(context);
+    final isCloudReady = chatProvider.hasApiKey;
+    final isLocalReady = chatProvider.hasLocalModel;
 
     return Center(
       child: SingleChildScrollView(
@@ -247,48 +267,151 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Your AI chat assistant that runs GGUF models locally\n'
-              'with GLM 5.1 cloud fallback and MCP tool support.',
+              'AI chat assistant dengan GGUF local inference\n'
+              'dan GLM cloud fallback via z-ai-web-dev-sdk.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 32),
+
+            // Status indicators
+            if (isCloudReady)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.green.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.cloud_done, color: Colors.green, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      'GLM Cloud API Connected',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.green,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Quick-start suggestions
+            if (isCloudReady) ...[
+              Text(
+                'Coba tanyakan sesuatu:',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  _SuggestionChip(
+                    text: 'Siapa kamu?',
+                    onTap: () {
+                      _messageController.text = 'Siapa kamu?';
+                      _sendMessage();
+                    },
+                    theme: theme,
+                  ),
+                  _SuggestionChip(
+                    text: 'Jelaskan Flutter',
+                    onTap: () {
+                      _messageController.text = 'Jelaskan Flutter secara singkat';
+                      _sendMessage();
+                    },
+                    theme: theme,
+                  ),
+                  _SuggestionChip(
+                    text: 'Buatkan kode',
+                    onTap: () {
+                      _messageController.text = 'Buatkan contoh kode Python hello world';
+                      _sendMessage();
+                    },
+                    theme: theme,
+                  ),
+                  _SuggestionChip(
+                    text: 'Cari berita terkini',
+                    onTap: () {
+                      _messageController.text = 'Cari berita terkini tentang teknologi AI';
+                      _sendMessage();
+                    },
+                    theme: theme,
+                  ),
+                ],
+              ),
+            ] else ...[
+              // No API key configured
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.warning_amber, color: Colors.orange, size: 20),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'API key belum dikonfigurasi. Buka Settings untuk mengatur.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.orange,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              FilledButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  );
+                },
+                icon: const Icon(Icons.settings),
+                label: const Text('Buka Settings'),
+              ),
+            ],
+
+            const SizedBox(height: 40),
+
+            // Feature chips (smaller, at bottom)
             Wrap(
-              spacing: 10,
-              runSpacing: 10,
+              spacing: 8,
+              runSpacing: 8,
               alignment: WrapAlignment.center,
               children: [
                 _FeatureChip(
-                  icon: Icons.memory,
-                  label: 'Local GGUF',
-                  color: Colors.green,
+                  icon: Icons.cloud,
+                  label: 'GLM Cloud',
+                  color: isCloudReady ? Colors.green : Colors.grey,
                 ),
                 _FeatureChip(
-                  icon: Icons.cloud,
-                  label: 'GLM 5.1 Cloud',
-                  color: Colors.blue,
+                  icon: Icons.memory,
+                  label: 'Local GGUF',
+                  color: isLocalReady ? Colors.green : Colors.grey,
                 ),
                 _FeatureChip(
                   icon: Icons.build_circle,
                   label: 'MCP Tools',
-                  color: Colors.orange,
-                ),
-                _FeatureChip(
-                  icon: Icons.security,
-                  label: 'Private & Offline',
-                  color: Colors.purple,
+                  color: isCloudReady ? Colors.blue : Colors.grey,
                 ),
               ],
-            ),
-            const SizedBox(height: 40),
-            Text(
-              'Load a model or configure API key to get started.',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.outline,
-              ),
             ),
           ],
         ),
@@ -344,9 +467,11 @@ class _ChatScreenState extends State<ChatScreen> {
               child: TextField(
                 controller: _messageController,
                 decoration: InputDecoration(
-                  hintText: 'Type a message...',
+                  hintText: chatProvider.hasApiKey
+                      ? 'Ketik pesan...'
+                      : 'Atur API key di Settings terlebih dahulu',
                   hintStyle: TextStyle(
-                    color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6),
+                    color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
                   ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(24),
@@ -388,6 +513,29 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
+class _SuggestionChip extends StatelessWidget {
+  final String text;
+  final VoidCallback onTap;
+  final ThemeData theme;
+
+  const _SuggestionChip({
+    required this.text,
+    required this.onTap,
+    required this.theme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ActionChip(
+      avatar: Icon(Icons.chat_bubble_outline,
+          size: 16, color: theme.colorScheme.primary),
+      label: Text(text),
+      onPressed: onTap,
+      side: BorderSide(color: theme.colorScheme.outlineVariant),
+    );
+  }
+}
+
 class _FeatureChip extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -403,9 +551,11 @@ class _FeatureChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Chip(
       avatar: Icon(icon, size: 16, color: color),
-      label: Text(label),
-      side: BorderSide(color: color.withOpacity(0.3)),
-      backgroundColor: color.withOpacity(0.08),
+      label: Text(label,
+          style: TextStyle(color: color, fontSize: 12)),
+      side: BorderSide(color: color.withValues(alpha: 0.3)),
+      backgroundColor: color.withValues(alpha: 0.08),
+      visualDensity: VisualDensity.compact,
     );
   }
 }

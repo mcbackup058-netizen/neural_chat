@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/chat_provider.dart';
-import '../providers/settings_provider.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/model_selector.dart';
 import '../widgets/typing_indicator.dart';

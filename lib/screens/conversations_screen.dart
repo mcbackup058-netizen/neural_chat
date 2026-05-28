@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../providers/chat_provider.dart';
-import '../services/chat_history_service.dart';
 
 class ConversationsScreen extends StatefulWidget {
   const ConversationsScreen({super.key});
